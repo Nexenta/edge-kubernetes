@@ -45,12 +45,16 @@ IPv6 networking support with docker > 1.13.x.
 Day1
 ===============
 - Install Kubespray on deployment machine
+	```bash
 	pip2 install kubespray
 	wget https://raw.githubusercontent.com/kubespray/kubespray-cli/master/src/kubespray/files/.kubespray.yml
 	mv .kubespray.yml ~/.kubespray/
+	```
 - And its deps..
+	```bash
 	add-apt-repository ppa:ansible/ansible && apt-get update && apt-get upgrade -y
 	apt-get install ansible
+	```
 
 - Overlayfs on the rootfs of your nodes?
 	```bash
