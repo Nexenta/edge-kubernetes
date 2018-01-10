@@ -1,3 +1,5 @@
+![logo](https://nexenta.com/rs/nexenta2/images/Nexenta-GL-logo-600-dpi.jpg)
+
 # edge-kubernetes
 NexentaEdge Kubernetes integration
 
@@ -13,22 +15,28 @@ If you have questions, join us on the [nexenta_edge slack](https://nexentaedge.s
 
 To deploy the cluster, depending on your current infrastructure :
 - [Day 1 - if necessary](#Day1)
-- 	kubespray + k8s 
+	- kubespray + k8s 
 - [Day 2](#Day2)
--	setup networking bridges for contiv + some sanity checks
--	deploy Edge via Helm chart
+	- setup networking bridges for contiv + some sanity checks
+	- deploy Edge via Helm chart
 
 *  [Requirements](#requirements)
 
 Supported Linux distributions
 ===============
 Ubuntu 16.04, 18.04 (experimental)
+
 RHEL-7.3
 
 Requirements
 --------------
 Many of the base requirements come as part of kubespray + k8s, however **Nexenta Edge** has
-specific requirements on versions of the same packages 
+specific requirements on versions of the same packages.
+
+Nexenta Edge also requires a minimum of 4 nodes each with 4+ raw disks devoted to the cluster.
+
+**Note:** The full documentation for NexentaEdge Enterprise Edition is [available here](https://nexenta.com/products/nexentaedge).
+**Note:** The core-runtime that the cluster runs and addtl info is [available_here](https://github.com/Nexenta/edge-dev).
 
 Versions of supported components
 --------------------------------
