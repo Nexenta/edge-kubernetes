@@ -1,0 +1,192 @@
+############################################################
+#
+# Multi-homed pod network configuration:
+#
+#  - contivk8s used for client
+#  - macvlan used for backend
+#
+# Assumptions:
+#
+#  - arch == amd64
+#  - K8s 1.8+
+#  - contivk8s preconfigured
+#  - macvlan master port set to Jumbo MTU 9000
+#
+# Before applying:
+#
+#  - edit macvlan master port
+#
+############################################################
+---
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  name: networks.kubernetes.com
+spec:
+  group: kubernetes.com
+  version: v1
+  scope: Cluster
+  names:
+    plural: networks
+    singular: network
+    kind: Network
+    shortNames:
+    - net
+
+---
+apiVersion: "kubernetes.com/v1"
+kind: Network
+metadata:
+  name: client-net
+plugin: contivk8s
+args: '[
+         {
+           "delegate": {
+             "isDefaultGateway": true
+           }
+         }
+       ]'
+
+---
+apiVersion: "kubernetes.com/v1"
+kind: Network
+metadata:
+  name: replicast
+plugin: macvlan
+args: '[
+         {
+	   "type": "macvlan",
+	   "master": "rep0",
+	   "mode": "bridge",
+	   "mtu": 9000,
+           "ipam": {
+             "type": "host-local",
+             "subnet": "192.168.1.0/24"
+           }
+         }
+       ]'
+
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: kube-multus-cfg
+  namespace: kube-system
+  labels:
+    tier: node
+    app: multus
+data:
+  multus_conf: |-
+    {
+      "name": "multus-cni-network",
+      "type": "multus",
+      "kubeconfig": "/etc/kubernetes/admin.conf",
+      "delegates": [{
+        "type": "contivk8s",
+        "hairpinMode": true,
+        "masterplugin": true
+      }]
+    }
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: multus
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - patch
+
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: multus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: multus
+subjects:
+- kind: ServiceAccount
+  name: multus
+  namespace: kube-system
+- kind: Group
+  name: system:authenticated
+  apiGroup: rbac.authorization.k8s.io
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: multus
+  namespace: kube-system
+
+---
+apiVersion: extensions/v1beta1
+kind: DaemonSet
+metadata:
+  name: multus
+  namespace: kube-system
+  labels:
+    tier: node
+    k8s-app: multus
+spec:
+  selector:
+    matchLabels:
+      k8s-app: multus
+  template:
+    metadata:
+      labels:
+        tier: node
+        k8s-app: multus
+      annotations:
+        scheduler.alpha.kubernetes.io/critical-pod: ''
+        scheduler.alpha.kubernetes.io/tolerations: |
+          [
+            {
+              "key": "dedicated", 
+              "value": "master", 
+              "effect": "NoSchedule" 
+            },
+            {
+              "key": "CriticalAddonsOnly", 
+              "operator": "Exists"
+            }
+          ]
+    spec:
+      hostNetwork: true
+      hostPID: true
+      initContainers:
+      - name: multus-deploy
+        image: nexenta/multus-deploy:1.0
+        command: ["/bin/sh","-c"]
+        args: ["cp /multus /opt/cni/bin/; cp /opt/etc/0-multus.conf /etc/cni/net.d/"]
+        volumeMounts:
+        - name: opt-cni-bin
+          mountPath: /opt/cni/bin
+        - name: etc-cni-dir
+          mountPath: /etc/cni/net.d
+        - name: kube-multus-cfg
+          mountPath: /opt/etc
+      containers:
+      - name: multus-deploy-wait
+        image: nexenta/multus-deploy:1.0
+        command: ["/bin/sh", "-c", "sleep 600000"]
+      volumes:
+        - name: opt-cni-bin
+          hostPath:
+            path: /opt/cni/bin
+        - name: etc-cni-dir
+          hostPath:
+            path: /etc/cni/net.d
+        - name: kube-multus-cfg
+          configMap:
+            name: kube-multus-cfg
+            items:
+            - key: multus_conf
+              path: 0-multus.conf
