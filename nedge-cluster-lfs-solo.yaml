@@ -218,7 +218,7 @@ spec:
             path: /dev
       containers:
         - name: corosync
-          image: 10.3.30.75:5000/nedge-target:2.1.3
+          image: nexenta/nedge-target:2.1.3
           imagePullPolicy: Always
           args: ["corosync"]
           securityContext:
@@ -232,7 +232,7 @@ spec:
             - name: nedge-target-state
               mountPath: /opt/nedge/var/run
         - name: auditd
-          image: 10.3.30.75:5000/nedge-target:2.1.3
+          image: nexenta/nedge-target:2.1.3
           imagePullPolicy: Always
           args: ["auditd"]
           env:
@@ -248,7 +248,7 @@ spec:
             - name: nedge-target-state
               mountPath: /opt/nedge/var/run
         - name: daemon
-          image: 10.3.30.75:5000/nedge-target:2.1.3
+          image: nexenta/nedge-target:2.1.3
           imagePullPolicy: Always
           args: ["daemon"]
           env:
@@ -378,7 +378,7 @@ spec:
             topologyKey: kubernetes.io/hostname
       containers:
       - name: rest
-        image: 10.3.30.75:5000/nedge:2.1.3
+        image: nexenta/nedge:2.1.3
         imagePullPolicy: Always
         args: ["start", "-j", "rest", "-j", "auditserv"]
         env:
@@ -387,7 +387,7 @@ spec:
               fieldRef:
                 fieldPath: spec.nodeName
           - name: CCOW_DOCKER_REGISTRY
-            value: "10.3.30.75:5000"
+            value: "nexenta"
         ports:
           - containerPort: 8080
           - containerPort: 4443
