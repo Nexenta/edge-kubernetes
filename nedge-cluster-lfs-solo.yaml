@@ -1,0 +1,444 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nedge
+
+---
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: local-storage
+provisioner: kubernetes.io/no-provisioner
+
+---
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: nedge-target-state
+  labels:
+    type: local
+spec:
+  persistentVolumeReclaimPolicy: Retain  
+  storageClassName: manual
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/mnt/nedge-target-state"
+
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: nedge-target-state-claim
+  namespace: nedge
+spec:
+  storageClassName: manual
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi 
+  volumeName: nedge-target-state
+
+---
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: nedge-target-data
+  labels:
+    type: local
+spec:
+  persistentVolumeReclaimPolicy: Retain  
+  storageClassName: local-storage
+  capacity:
+    storage: 1000Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/mnt/nedge-target-data"
+
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: nedge-target-data-claim
+  namespace: nedge
+spec:
+  storageClassName: local-storage
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1000Gi 
+  volumeName: nedge-target-data
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nedge-target
+  namespace: nedge
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: nedge-target
+  namespace: nedge
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: nedge-target
+  namespace: nedge
+rules:
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nedge-target
+subjects:
+- kind: ServiceAccount
+  name: nedge-target
+
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: nedge-solo-config
+  namespace: nedge
+data:
+  nesetup: |-
+    {
+      "ccow": {
+        "tenant": {
+          "failure_domain": 1
+        },
+        "network": {
+          "broker_interfaces": "eth0",
+          "server_unix_socket" : "/opt/nedge/var/run/sock/ccowd.sock"
+        }
+      },
+      "ccowd": {
+        "network": {
+          "server_interfaces": "eth0",
+          "server_unix_socket" : "/opt/nedge/var/run/sock/ccowd.sock"
+        },
+        "transport": [
+          "rtlfs"
+        ]
+      },
+      "auditd": {
+        "is_aggregator": 1
+      },
+      "rest": {
+        "password": "TQpcVgoSLA==",
+        "port": 8080,
+        "secure": {
+          "port": 4443
+        }
+      },
+      "ipv4_autodetect": 1,
+      "rtlfs_autodetect": "/data"
+    }
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: nedge-target
+  labels:
+    app: nedge-target
+spec:
+  clusterIP: None
+  selector:
+    app: nedge-target
+
+---
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: nedge-target
+  namespace: nedge
+  labels:
+    k8s-app: nedge-target
+spec:
+  serviceName: "nedge-target"
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: nedge-target
+  template:
+    metadata:
+      labels:
+        k8s-app: nedge-target
+      annotations:
+        scheduler.alpha.kubernetes.io/critical-pod: ''
+        scheduler.alpha.kubernetes.io/tolerations: |
+          [
+            {
+              "key": "dedicated", 
+              "value": "master", 
+              "effect": "NoSchedule" 
+            },
+            {
+              "key": "CriticalAddonsOnly", 
+              "operator": "Exists"
+            }
+          ]
+    spec:
+      hostIPC: true
+      serviceAccountName: nedge-target
+      volumes:
+        - name: nedge-target-state
+          persistentVolumeClaim:
+            claimName: nedge-target-state-claim
+        - name: nedge-target-data
+          persistentVolumeClaim:
+            claimName: nedge-target-data-claim
+        - name: nedge-solo-config
+          configMap:
+            name: nedge-solo-config
+            items:
+            - key: nesetup
+              path: nesetup.json
+        - name: devices
+          hostPath:
+            path: /dev
+      containers:
+        - name: corosync
+          image: 10.3.30.75:5000/nedge-target:2.1.3
+          imagePullPolicy: Always
+          args: ["corosync"]
+          securityContext:
+            capabilities:
+              add:
+                - SYS_NICE
+                - IPC_LOCK
+          volumeMounts:
+            - name: nedge-solo-config
+              mountPath: /opt/nedge/etc/config
+            - name: nedge-target-state
+              mountPath: /opt/nedge/var/run
+        - name: auditd
+          image: 10.3.30.75:5000/nedge-target:2.1.3
+          imagePullPolicy: Always
+          args: ["auditd"]
+          env:
+            - name: CCOW_LOG_LEVEL
+              value: "5"
+            - name: HOST_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: nedge-solo-config
+              mountPath: /opt/nedge/etc/config
+            - name: nedge-target-state
+              mountPath: /opt/nedge/var/run
+        - name: daemon
+          image: 10.3.30.75:5000/nedge-target:2.1.3
+          imagePullPolicy: Always
+          args: ["daemon"]
+          env:
+            - name: CCOW_LOG_LEVEL
+              value: "5"
+            - name: HOST_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            capabilities:
+              add:
+                - SYS_NICE
+                - SYS_RESOURCE
+          volumeMounts:
+            - name: devices
+              mountPath: /dev
+            - name: nedge-solo-config
+              mountPath: /opt/nedge/etc/config
+            - name: nedge-target-state
+              mountPath: /opt/nedge/var/run
+            - name: nedge-target-data
+              mountPath: /data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nedge-mgmt
+  namespace: nedge
+  labels:
+    app: nedge-mgmt
+spec:
+  type: NodePort
+  ports:
+    - port: 8080
+      nodePort: 30080
+      name: http-rest
+    - port: 4443
+      nodePort: 30443
+      name: https-rest
+    - port: 3000
+      nodePort: 31080
+      name: http-ui
+    - port: 3443
+      nodePort: 31443
+      name: https-ui
+    - port: 3444
+      nodePort: 31444
+      name: https-ui-audit
+  selector:
+    app: nedge-mgmt
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nedge-mgmt
+  namespace: nedge
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: nedge-mgmt
+  namespace: nedge
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: nedge-mgmt
+  namespace: nedge
+rules:
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nedge-mgmt
+subjects:
+- kind: ServiceAccount
+  name: nedge-mgmt
+- kind: User
+  name: "system:serviceaccount:nedge:default"
+
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: nedge-mgmt
+  namespace: nedge
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: nedge-mgmt
+    spec:
+      serviceAccountName: nedge-mgmt
+      hostIPC: true
+      volumes:
+        - name: nedge-target-state
+          persistentVolumeClaim:
+            claimName: nedge-target-state-claim
+        - name: nedge-solo-config
+          configMap:
+            name: nedge-solo-config
+            items:
+            - key: nesetup
+              path: nesetup.json
+        - name: kubectl
+          hostPath:
+            path: /usr/bin/kubectl
+            type: File
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: k8s-app
+                operator: In
+                values:
+                - nedge-target
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: rest
+        image: 10.3.30.75:5000/nedge:2.1.3
+        imagePullPolicy: Always
+        args: ["start", "-j", "rest", "-j", "auditserv"]
+        env:
+          - name: HOST_HOSTNAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+          - name: CCOW_DOCKER_REGISTRY
+            value: "10.3.30.75:5000"
+        ports:
+          - containerPort: 8080
+          - containerPort: 4443
+        volumeMounts:
+          - name: nedge-target-state
+            mountPath: /opt/nedge/var/run
+          - name: nedge-solo-config
+            mountPath: /opt/nedge/etc/config
+          - name: kubectl
+            mountPath: /usr/bin/kubectl
+        livenessProbe:
+          tcpSocket:
+            port: 8080
+          initialDelaySeconds: 60
+          timeoutSeconds: 5
+        readinessProbe:
+          tcpSocket:
+            port: 8080
+          timeoutSeconds: 20
+      - name: ui
+        image: nexenta/nedgeui:2.1.3
+        imagePullPolicy: Always
+        env:
+          - name: API_ENDPOINT
+            value: http://localhost:8080
+        ports:
+         - containerPort: 3000
+         - containerPort: 3443
+        livenessProbe:
+          tcpSocket:
+            port: 3000
+          initialDelaySeconds: 60
+          timeoutSeconds: 5
+        readinessProbe:
+          tcpSocket:
+            port: 3000
+          timeoutSeconds: 20
+      - name: ui-audit
+        image: nexenta/nedgeui-audit:2.1.3
+        imagePullPolicy: Always
+        env:
+          - name: API_ENDPOINT
+            value: http://localhost:8080
+        ports:
+         - containerPort: 3444
+        livenessProbe:
+          tcpSocket:
+            port: 3444
+          initialDelaySeconds: 60
+          timeoutSeconds: 5
+        readinessProbe:
+          tcpSocket:
+            port: 3444
+          timeoutSeconds: 20
