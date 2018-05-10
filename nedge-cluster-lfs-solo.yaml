@@ -408,7 +408,7 @@ spec:
             port: 8080
           timeoutSeconds: 20
       - name: ui
-        image: nexenta/nedgeui:2.1.3
+        image: nexenta/nedgeui:2.1.4
         imagePullPolicy: Always
         env:
           - name: API_ENDPOINT
