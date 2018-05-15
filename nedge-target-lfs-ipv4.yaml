@@ -1,0 +1,254 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nedge
+
+---
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: local-storage
+provisioner: kubernetes.io/no-provisioner
+
+---
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: nedge-target-state
+  labels:
+    type: local
+spec:
+  persistentVolumeReclaimPolicy: Retain  
+  storageClassName: manual
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/mnt/nedge-target-state"
+
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: nedge-target-state-claim
+  namespace: nedge
+spec:
+  storageClassName: manual
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi 
+  volumeName: nedge-target-state
+
+---
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: nedge-target-data
+  labels:
+    type: local
+spec:
+  persistentVolumeReclaimPolicy: Retain  
+  storageClassName: local-storage
+  capacity:
+    storage: 1000Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/mnt/nedge-target-data"
+
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: nedge-target-data-claim
+  namespace: nedge
+spec:
+  storageClassName: local-storage
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1000Gi 
+  volumeName: nedge-target-data
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nedge-target
+  namespace: nedge
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: nedge-target
+  namespace: nedge
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: nedge-target
+  namespace: nedge
+rules:
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nedge-target
+subjects:
+- kind: ServiceAccount
+  name: nedge-target
+
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: nedge-target-config
+  namespace: nedge
+data:
+  nesetup: |-
+    {
+      "ccow": {
+        "tenant": {
+          "failure_domain": 1
+        },
+        "network": {
+          "broker_interfaces": "eth0",
+          "server_unix_socket" : "/opt/nedge/var/run/sock/ccowd.sock"
+        }
+      },
+      "ccowd": {
+        "network": {
+          "server_interfaces": "eth0",
+          "server_unix_socket" : "/opt/nedge/var/run/sock/ccowd.sock"
+        },
+        "transport": [
+          "rtlfs"
+        ]
+      },
+      "auditd": {
+        "is_aggregator": 0
+      },
+      "ipv4_autodetect": 1,
+      "rtlfs_autodetect": "/data"
+    }
+
+---
+kind: DaemonSet
+apiVersion: extensions/v1beta1
+metadata:
+  name: nedge-target
+  namespace: nedge
+  labels:
+    k8s-app: nedge-target
+spec:
+  selector:
+    matchLabels:
+      k8s-app: nedge-target
+  template:
+    metadata:
+      labels:
+        k8s-app: nedge-target
+      annotations:
+        security.alpha.kubernetes.io/unsafe-sysctls: net.ipv6.ip6frag_high_thresh=10000000,net.ipv6.ip6frag_low_thresh=7000000,net.ipv6.ip6frag_time=120,net.ipv6.conf.all.force_mld_version=1
+        scheduler.alpha.kubernetes.io/critical-pod: ''
+        scheduler.alpha.kubernetes.io/tolerations: |
+          [
+            {
+              "key": "dedicated", 
+              "value": "master", 
+              "effect": "NoSchedule" 
+            },
+            {
+              "key": "CriticalAddonsOnly", 
+              "operator": "Exists"
+            }
+          ]
+    spec:
+      hostIPC: true
+      serviceAccountName: nedge-target
+      volumes:
+        - name: nedge-target-state
+          persistentVolumeClaim:
+            claimName: nedge-target-state-claim
+        - name: nedge-target-data
+          persistentVolumeClaim:
+            claimName: nedge-target-data-claim
+        - name: nedge-target-config
+          configMap:
+            name: nedge-target-config
+            items:
+            - key: nesetup
+              path: nesetup.json
+        - name: devices
+          hostPath:
+            path: /dev
+      containers:
+        - name: corosync
+          image: nexenta/nedge-target:2.1.3
+          imagePullPolicy: Always
+          args: ["corosync"]
+          securityContext:
+            capabilities:
+              add:
+                - SYS_NICE
+                - IPC_LOCK
+          volumeMounts:
+            - name: nedge-target-config
+              mountPath: /opt/nedge/etc/config
+            - name: nedge-target-state
+              mountPath: /opt/nedge/var/run
+        - name: auditd
+          image: nexenta/nedge-target:2.1.3
+          imagePullPolicy: Always
+          args: ["auditd"]
+          env:
+            - name: CCOW_LOG_LEVEL
+              value: "5"
+            - name: HOST_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: nedge-target-config
+              mountPath: /opt/nedge/etc/config
+            - name: nedge-target-state
+              mountPath: /opt/nedge/var/run
+        - name: daemon
+          image: nexenta/nedge-target:2.1.3
+          imagePullPolicy: Always
+          args: ["daemon"]
+          env:
+            - name: CCOW_LOG_LEVEL
+              value: "5"
+            - name: HOST_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            capabilities:
+              add:
+                - SYS_NICE
+                - SYS_RESOURCE
+          volumeMounts:
+            - name: devices
+              mountPath: /dev
+            - name: nedge-target-config
+              mountPath: /opt/nedge/etc/config
+            - name: nedge-target-state
+              mountPath: /opt/nedge/var/run
+            - name: nedge-target-data
+              mountPath: /data

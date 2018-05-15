@@ -41,13 +41,14 @@ data:
           "failure_domain": 1
         },
         "network": {
-          "broker_interfaces": "net0",
+          "broker_interfaces": "eth0",
           "server_unix_socket" : "/opt/nedge/var/run/sock/ccowd.sock"
         }
       },
       "auditd": {
         "is_aggregator": 1
       },
+      "ipv4_autodetect": 1,
       "rest": {
         "password": "TQpcVgoSLA==",
         "port": 8080,
@@ -112,6 +113,8 @@ spec:
     spec:
       serviceAccountName: nedge-mgmt
       hostIPC: true
+      nodeSelector:
+        kubernetes.io/hostname: "node231"
       volumes:
         - name: nedge-target-state
           persistentVolumeClaim:
